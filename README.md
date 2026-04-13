@@ -4,6 +4,7 @@
   - [Introduction](#introduction)
   - [Installation](#installation)
     - [Configuration](#configuration)
+    - [Upgrade](#upgrade)
   - [Development](#development)
     - [Testing](#testing)
     - [Build and publish](#build-and-publish)
@@ -21,6 +22,13 @@ and usage in a CSV file, in `~/.claude` folder.
 ```bash
 pip install cc-costtrack
 ```
+
+On newer Linux systems, install with:
+
+```bash
+pip3 install --break-system-packages cc-costtrack
+```
+
 
 ### Configuration
 
@@ -42,6 +50,20 @@ Add to `~/.claude/settings.json`:
     ]
   }
 }
+```
+
+### Upgrade
+
+Upgrade with pip regularly:
+
+```bash
+pip install cc-costtrack -U
+```
+
+On newer Linux systems, install with:
+
+```bash
+pip3 install --break-system-packages cc-costtrack -U
 ```
 
 ## Development
