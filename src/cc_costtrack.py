@@ -21,6 +21,10 @@ class CostTrackError(Exception):
     def __init__(self, message: str):
         super().__init__(f"cc-costtrack: {message}")
 
+class CostTrackNonFatalError(Exception):
+    def __init__(self, message: str):
+        super().__init__(f"cc-costtrack (non-terminal): {message}")
+
 class CostTrack:
     def __init__(self, data: dict):
         self.session_id = data.get("session_id", "")
@@ -51,9 +55,9 @@ class CostTrack:
                 cache_data = json.load(fl)
             self.cost_usd = cache_data.get("cost", {}).get("total_cost_usd", 0.0)
         except FileNotFoundError:
-            raise CostTrackError(f"cc-costtrack: status cache not found: {cache_path}")
+            raise CostTrackNonFatalError(f"status cache not found: {cache_path}")
         except (json.JSONDecodeError, KeyError) as exc:
-            raise CostTrackError(f"cc-costtrack: failed to parse status cache {cache_path}: {exc}")
+            raise CostTrackError(f"failed to parse status cache {cache_path}: {exc}")
 
     def __token_usage(self):
         self.input_tokens = 0
@@ -66,7 +70,7 @@ class CostTrack:
         if not self.transcript_path:
             raise CostTrackError("no transcript_path in hook input")
         if not os.path.isfile(self.transcript_path):
-            raise CostTrackError(f"cc-costtrack: transcript not found: {self.transcript_path}")
+            raise CostTrackError(f"transcript not found: {self.transcript_path}")
         with open(self.transcript_path) as fl_transcript:
             for line in fl_transcript:
                 stripped = line.strip()
@@ -114,9 +118,13 @@ def write_csv(cost_track: CostTrack):
 def cost_log():
     hook_input = json.load(sys.stdin)
     cost_track = CostTrack(hook_input)
-    cost_track.initialize()
+    try:
+        cost_track.initialize()
+        write_csv(cost_track)
+    except CostTrackNonFatalError:
+        # Ignore non-fatal errors.
+        pass
 
-    write_csv(cost_track)
 
 def main():
     cost_log()
