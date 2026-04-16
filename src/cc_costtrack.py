@@ -88,33 +88,66 @@ class CostTrack:
                 except json.JSONDecodeError:
                     continue
 
-def write_csv(cost_track: CostTrack):
-    header = ["timestamp", "session_id", "cwd", "git_branch", "input_tokens", "output_tokens",
-            "cache_creation_tokens", "cache_read_tokens", "cost_usd"]
-    new_row = [cost_track.time_stamp, cost_track.session_id, cost_track.cwd, cost_track.git_branch,
-            cost_track.input_tokens, cost_track.output_tokens, cost_track.cache_creation, cost_track.cache_read,
-            f"{cost_track.cost_usd:.4f}"]
+CSV_HEADER = ["timestamp", "session_id", "cwd", "git_branch", "input_tokens", "output_tokens",
+        "cache_creation_tokens", "cache_read_tokens", "cost_usd"]
 
-    # Read existing rows, filtering out any with the same session_id
-    existing_rows = []
-    if os.path.isfile(CSV_FILE):
-        with open(CSV_FILE, "r", newline="") as fl_r:
-            reader = csv.reader(fl_r)
-            next(reader, None)  # skip header
-            existing_rows = [row for row in reader if row[1] != cost_track.session_id]
+def _archive_path(year_month: str) -> str:
+    return os.path.join(CSV_DIR, f"claude-token-usage-{year_month}.csv")
 
-    os.makedirs(CSV_DIR, exist_ok=True)
+def _read_csv_rows(path: str) -> list:
+    if not os.path.isfile(path):
+        return []
+    with open(path, "r", newline="") as fl_r:
+        reader = csv.reader(fl_r)
+        next(reader, None)
+        return list(reader)
+
+def _write_csv_atomic(path: str, rows: list):
     fd, tmp_path = tempfile.mkstemp(dir=CSV_DIR, suffix=".csv")
     try:
         with os.fdopen(fd, "w", newline="") as fl_w:
             writer = csv.writer(fl_w)
-            writer.writerow(header)
-            writer.writerows(existing_rows)
-            writer.writerow(new_row)
-        os.replace(tmp_path, CSV_FILE)
+            writer.writerow(CSV_HEADER)
+            writer.writerows(rows)
+        os.replace(tmp_path, path)
     except Exception:
         os.unlink(tmp_path)
         raise
+
+def write_csv(cost_track: CostTrack):
+    new_row = [cost_track.time_stamp, cost_track.session_id, cost_track.cwd, cost_track.git_branch,
+            cost_track.input_tokens, cost_track.output_tokens, cost_track.cache_creation, cost_track.cache_read,
+            f"{cost_track.cost_usd:.4f}"]
+
+    current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    # Read existing rows, filtering out any with the same session_id
+    existing_rows = [r for r in _read_csv_rows(CSV_FILE) if r[1] != cost_track.session_id]
+
+    # Partition into current month vs past months
+    current_rows = []
+    archive_groups = {}
+    for row in existing_rows:
+        ym = row[0][:7]  # YYYY-MM from ISO timestamp
+        if ym == current_month:
+            current_rows.append(row)
+        else:
+            archive_groups.setdefault(ym, []).append(row)
+
+    os.makedirs(CSV_DIR, exist_ok=True)
+
+    # Append past-month rows to their archive files
+    for ym, rows in archive_groups.items():
+        archive = _archive_path(ym)
+        existing_archive = _read_csv_rows(archive)
+        archived_ids = {r[1] for r in existing_archive}
+        new_archive_rows = [r for r in rows if r[1] not in archived_ids]
+        if new_archive_rows:
+            _write_csv_atomic(archive, existing_archive + new_archive_rows)
+
+    # Main file keeps only current month + new row
+    current_rows.append(new_row)
+    _write_csv_atomic(CSV_FILE, current_rows)
 
 def cost_log():
     hook_input = json.load(sys.stdin)
