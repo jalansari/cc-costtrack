@@ -5,15 +5,18 @@ the session's total_cost_usd as reported by Claude Code.
 """
 
 import csv
+import fcntl
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 CSV_DIR = os.path.expanduser("~/.claude/cc-costtrack")
 CSV_FILE = os.path.join(CSV_DIR, "claude-token-usage.csv")
+LOCK_FILE = os.path.join(CSV_DIR, ".lock")
 CACHE_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"claude_status_cache_{os.getuid()}")
 
 STATUS_CACHE_FILE_SUFFIX = "_cache_stdin.json"
@@ -114,6 +117,17 @@ def _write_csv_atomic(path: str, rows: list):
         os.unlink(tmp_path)
         raise
 
+@contextmanager
+def _csv_lock():
+    os.makedirs(CSV_DIR, exist_ok=True)
+    fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
 def write_csv(cost_track: CostTrack):
     new_row = [cost_track.time_stamp, cost_track.session_id, cost_track.cwd, cost_track.git_branch,
             cost_track.input_tokens, cost_track.output_tokens, cost_track.cache_creation, cost_track.cache_read,
@@ -121,33 +135,32 @@ def write_csv(cost_track: CostTrack):
 
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
 
-    # Read existing rows, filtering out any with the same session_id
-    existing_rows = [r for r in _read_csv_rows(CSV_FILE) if r[1] != cost_track.session_id]
+    with _csv_lock():
+        # Read existing rows, filtering out any with the same session_id
+        existing_rows = [r for r in _read_csv_rows(CSV_FILE) if r[1] != cost_track.session_id]
 
-    # Partition into current month vs past months
-    current_rows = []
-    archive_groups = {}
-    for row in existing_rows:
-        ym = row[0][:7]  # YYYY-MM from ISO timestamp
-        if ym == current_month:
-            current_rows.append(row)
-        else:
-            archive_groups.setdefault(ym, []).append(row)
+        # Partition into current month vs past months
+        current_rows = []
+        archive_groups = {}
+        for row in existing_rows:
+            ym = row[0][:7]  # YYYY-MM from ISO timestamp
+            if ym == current_month:
+                current_rows.append(row)
+            else:
+                archive_groups.setdefault(ym, []).append(row)
 
-    os.makedirs(CSV_DIR, exist_ok=True)
+        # Append past-month rows to their archive files
+        for ym, rows in archive_groups.items():
+            archive = _archive_path(ym)
+            existing_archive = _read_csv_rows(archive)
+            archived_ids = {r[1] for r in existing_archive}
+            new_archive_rows = [r for r in rows if r[1] not in archived_ids]
+            if new_archive_rows:
+                _write_csv_atomic(archive, existing_archive + new_archive_rows)
 
-    # Append past-month rows to their archive files
-    for ym, rows in archive_groups.items():
-        archive = _archive_path(ym)
-        existing_archive = _read_csv_rows(archive)
-        archived_ids = {r[1] for r in existing_archive}
-        new_archive_rows = [r for r in rows if r[1] not in archived_ids]
-        if new_archive_rows:
-            _write_csv_atomic(archive, existing_archive + new_archive_rows)
-
-    # Main file keeps only current month + new row
-    current_rows.append(new_row)
-    _write_csv_atomic(CSV_FILE, current_rows)
+        # Main file keeps only current month + new row
+        current_rows.append(new_row)
+        _write_csv_atomic(CSV_FILE, current_rows)
 
 def cost_log():
     hook_input = json.load(sys.stdin)
