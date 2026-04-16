@@ -12,7 +12,8 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 
-CSV_FILE = os.path.expanduser("~/.claude/claude-token-usage.csv")
+CSV_DIR = os.path.expanduser("~/.claude/cc-costtrack")
+CSV_FILE = os.path.join(CSV_DIR, "claude-token-usage.csv")
 CACHE_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"claude_status_cache_{os.getuid()}")
 
 STATUS_CACHE_FILE_SUFFIX = "_cache_stdin.json"
@@ -102,8 +103,8 @@ def write_csv(cost_track: CostTrack):
             next(reader, None)  # skip header
             existing_rows = [row for row in reader if row[1] != cost_track.session_id]
 
-    csv_dir = os.path.dirname(CSV_FILE)
-    fd, tmp_path = tempfile.mkstemp(dir=csv_dir, suffix=".csv")
+    os.makedirs(CSV_DIR, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=CSV_DIR, suffix=".csv")
     try:
         with os.fdopen(fd, "w", newline="") as fl_w:
             writer = csv.writer(fl_w)
